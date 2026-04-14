@@ -8,10 +8,11 @@ import altair as alt
 from Bio import SeqIO
 from collections import Counter
 
-# Import algorithms directly (removed impossible ImportError exception)
+# Import algorithms directly
 from algorithms.patternhunter import run_patternhunter_generator
 from algorithms.blast import run_blast_generator
 from algorithms.progressive import run_progressive_msa_generator
+from algorithms.iterative import run_iterative_msa_generator
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -38,7 +39,6 @@ def calculate_e_value(score, query_len, ref_len):
     """
     K = 0.1
     lam = 0.3
-    # Removed impossible OverflowError exception because (-lam * score) is negative
     return K * query_len * ref_len * math.exp(-lam * score)
 
 def render_alignment(q_str, r_str, organism_name="", file_name=""):
@@ -185,7 +185,6 @@ def load_fasta(organism_name, data_dir="Data"):
     for file in os.listdir(org_path):
         if file.endswith((".fasta", ".fa")):
             file_path = os.path.join(org_path, file)
-            # Assuming files are valid FASTA if they have the extension
             record = next(SeqIO.parse(file_path, "fasta"))
             return str(record.seq).upper(), file
             
@@ -256,7 +255,7 @@ if app_mode == "Pairwise Alignment (1 vs 1)":
     st.divider()
 
     st.markdown("### 2. Analysis & Alignment")
-    tab1, tab2 = st.tabs(["Algorithm Exploration (Single Run)", "Arena (Performance Comparison)"])
+    tab1, tab2 = st.tabs(["Single Run", "Performance Comparison"])
 
     # ====== TAB 1: SINGLE RUN ======
     with tab1:
@@ -272,7 +271,7 @@ if app_mode == "Pairwise Alignment (1 vs 1)":
             else:
                 w_input = st.number_input("K-mer Size (w):", min_value=2, max_value=50, value=11, key="t1_w")
                 
-            btn_run_single = st.button("Start Scanning", use_container_width=True)
+            btn_run_single = st.button("Start Scanning", width='content')
 
         with col_t1_right:
             st.markdown("**Visualization Screen**")
@@ -355,7 +354,7 @@ if app_mode == "Pairwise Alignment (1 vs 1)":
             t2_blast_w = st.number_input("K-mer Size (w):", min_value=2, max_value=50, value=11, key="t2_w")
             
         st.markdown("<br>", unsafe_allow_html=True)
-        btn_compare = st.button("START COMPARISON", use_container_width=True, type="primary")
+        btn_compare = st.button("START COMPARISON", width='content', type="primary")
         
         if btn_compare:
             with st.spinner("Racing 2 algorithms..."):
@@ -399,7 +398,7 @@ if app_mode == "Pairwise Alignment (1 vs 1)":
                     y="Execution Time (s)",
                     tooltip=["Algorithm", "Execution Time (s)"]
                 ).properties(height=350)
-                st.altair_chart(chart_time, use_container_width=True)
+                st.altair_chart(chart_time, width='content')
                 
             with col_chart2:
                 st.markdown("**Memory Usage Comparison**")
@@ -408,7 +407,7 @@ if app_mode == "Pairwise Alignment (1 vs 1)":
                     y="Peak Memory (KB)",
                     tooltip=["Algorithm", "Peak Memory (KB)"]
                 ).properties(height=350)
-                st.altair_chart(chart_mem, use_container_width=True)
+                st.altair_chart(chart_mem, width='content')
 
             st.divider()
             st.subheader("Best Hit Details")
@@ -464,45 +463,153 @@ ATGCTAGCTAG-AAGCTGATCGCAT
     st.markdown("#### Input Data (Multi-FASTA format)")
     fasta_input = st.text_area("Paste your sequences here:", value=default_fasta, height=180)
     
-    col_msa1, col_msa2 = st.columns([1, 4])
-    with col_msa1:
-        algo_msa = st.selectbox("MSA Algorithm:", ["Progressive Alignment", "ClustalW (Coming Soon)"])
-        btn_run_msa = st.button("Run Alignment", type="primary", use_container_width=True)
-    
     st.divider()
-    
-    if btn_run_msa:
-        names, seqs = parse_multi_fasta_text(fasta_input)
+
+    st.markdown("### 2. Analysis & Alignment")
+    tab1_msa, tab2_msa = st.tabs(["Single Run", "Performance Comparison"])
+
+    # ====== TAB 1: SINGLE RUN (MSA) ======
+    with tab1_msa:
+        col_msa1, col_msa2 = st.columns([1, 2.5])
         
-        if len(seqs) < 2:
-            st.error("Please provide at least 2 sequences to align.")
-        else:
-            viz_container = st.empty()
+        with col_msa1:
+            st.markdown("**Parameter Settings**")
+            algo_msa = st.selectbox("MSA Algorithm:", ["Progressive Alignment", "Iterative Refinement", "ClustalW (Coming Soon)"])
             
-            # --- Call Progressive MSA Algorithm ---
-            generator = run_progressive_msa_generator(seqs, names)
+            t1_iterations = 2
+            if algo_msa == "Iterative Refinement":
+                t1_iterations = st.number_input("Refinement Iterations:", min_value=1, max_value=10, value=2, key="t1_msa_iter")
+                
+            btn_run_msa = st.button("Run Alignment", type="primary", width='content')
+        
+        with col_msa2:
+            st.markdown("**Visualization Screen**")
+            if btn_run_msa:
+                names, seqs = parse_multi_fasta_text(fasta_input)
+                
+                if len(seqs) < 2:
+                    st.error("Please provide at least 2 sequences to align.")
+                else:
+                    viz_container = st.empty()
+                    
+                    # --- Call the appropriate MSA Algorithm ---
+                    if algo_msa == "Progressive Alignment":
+                        generator = run_progressive_msa_generator(seqs, names)
+                    elif algo_msa == "Iterative Refinement":
+                        generator = run_iterative_msa_generator(seqs, names, iterations=t1_iterations)
+                    else:
+                        st.warning("This algorithm is coming soon. Running Progressive Alignment instead.")
+                        generator = run_progressive_msa_generator(seqs, names)
+                    
+                    for step_data in generator:
+                        if step_data["status"] == "running":
+                            with viz_container.container():
+                                st.markdown(f"**Step {step_data['step']}:** {step_data['message']}")
+                                if step_data.get("current_msa"):
+                                    st.markdown(render_msa(step_data["current_msa"], step_data["current_names"]), unsafe_allow_html=True)
+                            time.sleep(0.5) # Delay for animation effect
+                            
+                        elif step_data["status"] == "done":
+                            viz_container.empty()
+                            st.success(f"{algo_msa} completed!")
+                            
+                            st.subheader("Final Alignment Results")
+                            st.markdown(render_msa(step_data["msa"], step_data["names"]), unsafe_allow_html=True)
+                            
+                            st.info("💡 **Legend:** Green background indicates 100% conservation. Yellow background indicates high conservation (>60%).")
+                            
+                            # Performance Metrics
+                            st.divider()
+                            st.subheader("Performance Metrics")
+                            m1, m2, m3 = st.columns(3)
+                            m1.metric("Execution Time", f"{step_data['metrics']['time_seconds']}s")
+                            m2.metric("Sequences Aligned", step_data['metrics']['num_sequences'])
+                            m3.metric("MSA Profile Length", step_data['metrics']['alignment_length'])
+
+    # ====== TAB 2: COMPARISON (MSA) ======
+    with tab2_msa:
+        st.markdown("Compare the performance and final alignment quality of Progressive Alignment vs. Iterative Refinement.")
+        
+        col_algoA, col_algoB = st.columns(2)
+        
+        with col_algoA:
+            st.info("**Algorithm A: Progressive Alignment**")
+            st.write("Fast, greedy approach. Good for closely related sequences.")
             
-            for step_data in generator:
-                if step_data["status"] == "running":
-                    with viz_container.container():
-                        st.markdown(f"**Step {step_data['step']}:** {step_data['message']}")
-                        if step_data.get("current_msa"):
-                            st.markdown(render_msa(step_data["current_msa"], step_data["current_names"]), unsafe_allow_html=True)
-                    time.sleep(0.5) # Delay for animation effect
+        with col_algoB:
+            st.warning("**Algorithm B: Iterative Refinement**")
+            st.write("Repeatedly refines the alignment. Slower but potentially more accurate.")
+            t2_iterations = st.number_input("Refinement Iterations:", min_value=1, max_value=10, value=2, key="t2_msa_iter")
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        btn_compare_msa = st.button("START MSA COMPARISON", width='content', type="primary")
+        
+        if btn_compare_msa:
+            names, seqs = parse_multi_fasta_text(fasta_input)
+            
+            if len(seqs) < 2:
+                st.error("Please provide at least 2 sequences to align.")
+            else:
+                with st.spinner("Racing MSA algorithms..."):
+                    # --- Run Progressive ---
+                    tracemalloc.start()
+                    prog_gen = run_progressive_msa_generator(seqs, names)
+                    for prog_res in prog_gen: pass 
+                    _, prog_peak_mem = tracemalloc.get_traced_memory()
+                    tracemalloc.stop()
+                    prog_peak_kb = prog_peak_mem / 1024
                     
-                elif step_data["status"] == "done":
-                    viz_container.empty()
-                    st.success("Multiple Sequence Alignment completed!")
+                    # --- Run Iterative ---
+                    tracemalloc.start()
+                    iter_gen = run_iterative_msa_generator(seqs, names, iterations=t2_iterations)
+                    for iter_res in iter_gen: pass
+                    _, iter_peak_mem = tracemalloc.get_traced_memory()
+                    tracemalloc.stop()
+                    iter_peak_kb = iter_peak_mem / 1024
                     
-                    st.subheader("Final Alignment Results")
-                    st.markdown(render_msa(step_data["msa"], step_data["names"]), unsafe_allow_html=True)
+                st.success("Comparison completed!")
+                st.divider()
+                
+                st.subheader("Performance Report")
+                col_s1, col_s2 = st.columns(2)
+                with col_s1:
+                    st.info(f"**Progressive:** {prog_res['metrics']['alignment_length']} columns | Time: {prog_res['metrics']['time_seconds']}s")
+                with col_s2:
+                    st.warning(f"**Iterative ({t2_iterations} cycles):** {iter_res['metrics']['alignment_length']} columns | Time: {iter_res['metrics']['time_seconds']}s")
                     
-                    st.info("💡 **Legend:** Green background indicates 100% conservation. Yellow background indicates high conservation (>60%).")
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                df_metrics = pd.DataFrame({
+                    "Algorithm": ["Progressive Alignment", "Iterative Refinement"],
+                    "Execution Time (s)": [prog_res['metrics']['time_seconds'], iter_res['metrics']['time_seconds']],
+                    "Peak Memory (KB)": [prog_peak_kb, iter_peak_kb]
+                })
+                
+                col_chart1, col_chart2 = st.columns(2)
+                with col_chart1:
+                    st.markdown("**Execution Time Comparison**")
+                    chart_time = alt.Chart(df_metrics).mark_bar(color="#1f77b4").encode(
+                        x=alt.X("Algorithm", axis=alt.Axis(labelAngle=0)), 
+                        y="Execution Time (s)",
+                        tooltip=["Algorithm", "Execution Time (s)"]
+                    ).properties(height=350)
+                    st.altair_chart(chart_time, width='content')
                     
-                    # Performance Metrics
-                    st.divider()
-                    st.subheader("Performance Metrics")
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Execution Time", f"{step_data['metrics']['time_seconds']}s")
-                    m2.metric("Sequences Aligned", step_data['metrics']['num_sequences'])
-                    m3.metric("MSA Profile Length", step_data['metrics']['alignment_length'])
+                with col_chart2:
+                    st.markdown("**Memory Usage Comparison**")
+                    chart_mem = alt.Chart(df_metrics).mark_bar(color="#ff7f0e").encode(
+                        x=alt.X("Algorithm", axis=alt.Axis(labelAngle=0)),
+                        y="Peak Memory (KB)",
+                        tooltip=["Algorithm", "Peak Memory (KB)"]
+                    ).properties(height=350)
+                    st.altair_chart(chart_mem, width='content')
+
+                st.divider()
+                st.subheader("Final Alignment Comparison")
+                st.markdown("Visual comparison of the final MSA profiles generated by each algorithm.")
+                
+                st.markdown("##### Progressive Alignment")
+                st.markdown(render_msa(prog_res["msa"], prog_res["names"]), unsafe_allow_html=True)
+                
+                st.markdown("##### Iterative Refinement")
+                st.markdown(render_msa(iter_res["msa"], iter_res["names"]), unsafe_allow_html=True)
