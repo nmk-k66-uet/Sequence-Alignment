@@ -13,6 +13,7 @@ from algorithms.patternhunter import run_patternhunter_generator
 from algorithms.blast import run_blast_generator
 from algorithms.progressive import run_progressive_msa_generator
 from algorithms.iterative import run_iterative_msa_generator
+from algorithms.kmer_clustering import run_ml_clustering_msa_generator
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -202,7 +203,7 @@ def parse_multi_fasta_text(fasta_text):
         - tuple: (List of sequence names, List of nucleotide sequences).
     """
     names, seqs = [], []
-    curr_name, curr_seq = "", []
+    curr_name, curr_seq = "" , []
     for line in fasta_text.strip().split('\n'):
         line = line.strip()
         if not line: continue
@@ -443,6 +444,7 @@ if app_mode == "Pairwise Alignment (1 vs 1)":
                 else:
                     st.write("No results.")
 
+
 # ==========================================
 # MODE 2: MULTIPLE SEQUENCE ALIGNMENT (MSA)
 # ==========================================
@@ -462,11 +464,11 @@ ATGCTAGCTAG-AAGCTGATCGCAT
 """
     st.markdown("#### Input Data (Multi-FASTA format)")
     fasta_input = st.text_area("Paste your sequences here:", value=default_fasta, height=180)
-    
     st.divider()
 
-    st.markdown("### 2. Analysis & Alignment")
     tab1_msa, tab2_msa = st.tabs(["Single Run", "Performance Comparison"])
+    
+    msa_algo_list = ["Progressive Alignment", "Iterative Refinement", "K-mer Clustering (Hybrid ML)"]
 
     # ====== TAB 1: SINGLE RUN (MSA) ======
     with tab1_msa:
@@ -474,11 +476,13 @@ ATGCTAGCTAG-AAGCTGATCGCAT
         
         with col_msa1:
             st.markdown("**Parameter Settings**")
-            algo_msa = st.selectbox("MSA Algorithm:", ["Progressive Alignment", "Iterative Refinement", "ClustalW (Coming Soon)"])
+            algo_msa = st.selectbox("MSA Algorithm:", msa_algo_list, key="t1_algo_msa")
             
-            t1_iterations = 2
+            t1_params = {}
             if algo_msa == "Iterative Refinement":
-                t1_iterations = st.number_input("Refinement Iterations:", min_value=1, max_value=10, value=2, key="t1_msa_iter")
+                t1_params['iterations'] = st.number_input("Refinement Iterations:", min_value=1, max_value=10, value=2, key="t1_msa_iter")
+            elif algo_msa == "K-mer Clustering (Hybrid ML)":
+                t1_params['k'] = st.number_input("K-mer Size (Feature Extraction):", min_value=2, max_value=6, value=3, key="t1_msa_kmer")
                 
             btn_run_msa = st.button("Run Alignment", type="primary", width='content')
         
@@ -496,10 +500,9 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                     if algo_msa == "Progressive Alignment":
                         generator = run_progressive_msa_generator(seqs, names)
                     elif algo_msa == "Iterative Refinement":
-                        generator = run_iterative_msa_generator(seqs, names, iterations=t1_iterations)
-                    else:
-                        st.warning("This algorithm is coming soon. Running Progressive Alignment instead.")
-                        generator = run_progressive_msa_generator(seqs, names)
+                        generator = run_iterative_msa_generator(seqs, names, iterations=t1_params['iterations'])
+                    elif algo_msa == "K-mer Clustering (Hybrid ML)":
+                        generator = run_ml_clustering_msa_generator(seqs, names, k=t1_params['k'])
                     
                     for step_data in generator:
                         if step_data["status"] == "running":
@@ -528,18 +531,26 @@ ATGCTAGCTAG-AAGCTGATCGCAT
 
     # ====== TAB 2: COMPARISON (MSA) ======
     with tab2_msa:
-        st.markdown("Compare the performance and final alignment quality of Progressive Alignment vs. Iterative Refinement.")
-        
+        st.markdown("Compare the performance and final alignment quality of different MSA approaches.")
         col_algoA, col_algoB = st.columns(2)
         
         with col_algoA:
-            st.info("**Algorithm A: Progressive Alignment**")
-            st.write("Fast, greedy approach. Good for closely related sequences.")
-            
+            st.info("**Algorithm A**")
+            t2_algoA = st.selectbox("Select Algorithm A:", msa_algo_list, index=0, key="t2_algoA")
+            t2_paramsA = {}
+            if t2_algoA == "Iterative Refinement":
+                t2_paramsA['iterations'] = st.number_input("Refinement Iterations (A):", min_value=1, max_value=10, value=2, key="t2_iterA")
+            elif t2_algoA == "K-mer Clustering (Hybrid ML)":
+                t2_paramsA['k'] = st.number_input("K-mer Size (A):", min_value=2, max_value=6, value=3, key="t2_kmerA")
+                
         with col_algoB:
-            st.warning("**Algorithm B: Iterative Refinement**")
-            st.write("Repeatedly refines the alignment. Slower but potentially more accurate.")
-            t2_iterations = st.number_input("Refinement Iterations:", min_value=1, max_value=10, value=2, key="t2_msa_iter")
+            st.warning("**Algorithm B**")
+            t2_algoB = st.selectbox("Select Algorithm B:", msa_algo_list, index=2, key="t2_algoB")
+            t2_paramsB = {}
+            if t2_algoB == "Iterative Refinement":
+                t2_paramsB['iterations'] = st.number_input("Refinement Iterations (B):", min_value=1, max_value=10, value=2, key="t2_iterB")
+            elif t2_algoB == "K-mer Clustering (Hybrid ML)":
+                t2_paramsB['k'] = st.number_input("K-mer Size (B):", min_value=2, max_value=6, value=3, key="t2_kmerB")
             
         st.markdown("<br>", unsafe_allow_html=True)
         btn_compare_msa = st.button("START MSA COMPARISON", width='content', type="primary")
@@ -551,21 +562,30 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                 st.error("Please provide at least 2 sequences to align.")
             else:
                 with st.spinner("Racing MSA algorithms..."):
-                    # --- Run Progressive ---
-                    tracemalloc.start()
-                    prog_gen = run_progressive_msa_generator(seqs, names)
-                    for prog_res in prog_gen: pass 
-                    _, prog_peak_mem = tracemalloc.get_traced_memory()
-                    tracemalloc.stop()
-                    prog_peak_kb = prog_peak_mem / 1024
                     
-                    # --- Run Iterative ---
+                    def run_selected_generator(algo_name, params):
+                        if algo_name == "Progressive Alignment":
+                            return run_progressive_msa_generator(seqs, names)
+                        elif algo_name == "Iterative Refinement":
+                            return run_iterative_msa_generator(seqs, names, iterations=params['iterations'])
+                        elif algo_name == "K-mer Clustering (Hybrid ML)":
+                            return run_ml_clustering_msa_generator(seqs, names, k=params['k'])
+                    
+                    # --- Run Algorithm A ---
                     tracemalloc.start()
-                    iter_gen = run_iterative_msa_generator(seqs, names, iterations=t2_iterations)
-                    for iter_res in iter_gen: pass
-                    _, iter_peak_mem = tracemalloc.get_traced_memory()
+                    genA = run_selected_generator(t2_algoA, t2_paramsA)
+                    for resA in genA: pass
+                    _, peakA = tracemalloc.get_traced_memory()
                     tracemalloc.stop()
-                    iter_peak_kb = iter_peak_mem / 1024
+                    peakA_kb = peakA / 1024
+                    
+                    # --- Run Algorithm B ---
+                    tracemalloc.start()
+                    genB = run_selected_generator(t2_algoB, t2_paramsB)
+                    for resB in genB: pass
+                    _, peakB = tracemalloc.get_traced_memory()
+                    tracemalloc.stop()
+                    peakB_kb = peakB / 1024
                     
                 st.success("Comparison completed!")
                 st.divider()
@@ -573,16 +593,16 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                 st.subheader("Performance Report")
                 col_s1, col_s2 = st.columns(2)
                 with col_s1:
-                    st.info(f"**Progressive:** {prog_res['metrics']['alignment_length']} columns | Time: {prog_res['metrics']['time_seconds']}s")
+                    st.info(f"**A ({t2_algoA}):** {resA['metrics']['alignment_length']} columns | Time: {resA['metrics']['time_seconds']}s")
                 with col_s2:
-                    st.warning(f"**Iterative ({t2_iterations} cycles):** {iter_res['metrics']['alignment_length']} columns | Time: {iter_res['metrics']['time_seconds']}s")
+                    st.warning(f"**B ({t2_algoB}):** {resB['metrics']['alignment_length']} columns | Time: {resB['metrics']['time_seconds']}s")
                     
                 st.markdown("<br>", unsafe_allow_html=True)
                 
                 df_metrics = pd.DataFrame({
-                    "Algorithm": ["Progressive Alignment", "Iterative Refinement"],
-                    "Execution Time (s)": [prog_res['metrics']['time_seconds'], iter_res['metrics']['time_seconds']],
-                    "Peak Memory (KB)": [prog_peak_kb, iter_peak_kb]
+                    "Algorithm": [f"A: {t2_algoA}", f"B: {t2_algoB}"],
+                    "Execution Time (s)": [resA['metrics']['time_seconds'], resB['metrics']['time_seconds']],
+                    "Peak Memory (KB)": [peakA_kb, peakB_kb]
                 })
                 
                 col_chart1, col_chart2 = st.columns(2)
@@ -608,8 +628,8 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                 st.subheader("Final Alignment Comparison")
                 st.markdown("Visual comparison of the final MSA profiles generated by each algorithm.")
                 
-                st.markdown("##### Progressive Alignment")
-                st.markdown(render_msa(prog_res["msa"], prog_res["names"]), unsafe_allow_html=True)
+                st.markdown(f"##### Algorithm A: {t2_algoA}")
+                st.markdown(render_msa(resA["msa"], resA["names"]), unsafe_allow_html=True)
                 
-                st.markdown("##### Iterative Refinement")
-                st.markdown(render_msa(iter_res["msa"], iter_res["names"]), unsafe_allow_html=True)
+                st.markdown(f"##### Algorithm B: {t2_algoB}")
+                st.markdown(render_msa(resB["msa"], resB["names"]), unsafe_allow_html=True)
