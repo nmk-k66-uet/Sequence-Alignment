@@ -2,7 +2,9 @@ import time
 
 def build_kmer_index(reference, w):
     """
-    Cắt chuỗi Reference thành các k-mer liên tiếp và đưa vào Hash Table.
+    Build a k-mer index (hash table) for the reference sequence.
+    Splits the reference sequence into consecutive k-mers of length w and stores their positions.
+    This index enables rapid lookup of k-mer occurrences during query scanning (O(1) average case).
     """
     index = {}
     for i in range(len(reference) - w + 1):
@@ -14,19 +16,22 @@ def build_kmer_index(reference, w):
 
 def extend_hit(query, reference, q_pos, r_pos, w):
     """
-    Mở rộng kết quả sang hai bên mà không cho phép gap (Gapless Extension).
+    Perform gapless extension of a k-mer hit in both directions.
+    Starting from the initial k-mer match, extend left and right by matching characters,
+    accumulating a score that reflects the total length of the ungapped matching region.
+    This extension phase identifies local alignment regions with high similarity.
     """
     q_start, q_end = q_pos, q_pos + w
     r_start, r_end = r_pos, r_pos + w
-    score = w # Điểm cơ bản là độ dài k-mer
+    score = w # Base score is the k-mer length
     
-    # Mở rộng sang phải
+    # Extend right
     while q_end < len(query) and r_end < len(reference) and query[q_end] == reference[r_end]:
         score += 1
         q_end += 1
         r_end += 1
         
-    # Mở rộng sang trái
+    # Extend left
     while q_start > 0 and r_start > 0 and query[q_start-1] == reference[r_start-1]:
         score += 1
         q_start -= 1
@@ -41,7 +46,10 @@ def extend_hit(query, reference, q_pos, r_pos, w):
 
 def run_blast_generator(query, reference, w=11):
     """
-    Hàm Generator: Quét, tìm k-mer, mở rộng và trả về trạng thái từng bước.
+    Generator function implementing the BLAST (Basic Local Alignment Search Tool) algorithm.
+    Sequentially scans the query sequence for k-mer matches in the reference,
+    extends matched hits, and yields status updates at each step for real-time visualization.
+    Returns gapless local alignments above the significance threshold.
     """
     start_time = time.time()
     
@@ -54,15 +62,15 @@ def run_blast_generator(query, reference, w=11):
         
         if kmer in ref_index:
             for ref_pos in ref_index[kmer]:
-                # Nếu tìm thấy k-mer, tiến hành mở rộng (extension)
+                # If k-mer is found, proceed with gapless extension
                 extended_hit = extend_hit(query, reference, query_pos, ref_pos, w)
                 
-                # Lọc trùng lặp đơn giản
+                # Remove simple duplicates
                 if extended_hit not in hits:
                     hits.append(extended_hit)
                     current_step_extensions.append(extended_hit)
                     
-        # Yield trạng thái để Streamlit cập nhật UI
+        # Yield status for Streamlit to update the UI
         yield {
             "status": "running",
             "step": query_pos + 1,

@@ -2,7 +2,10 @@ import time
 
 def apply_spaced_seed(sequence, start_index, seed_model):
     """
-    Áp dụng mặt nạ (spaced seed) lên chuỗi tại một vị trí cụ thể.
+    Apply a spaced seed (mask pattern) to a sequence at a specific position.
+    Extracts only positions marked with '1' in the seed model, ignoring '0' positions.
+    This selective matching allows PSSM-like flexibility while maintaining seed specificity,
+    improving sensitivity for distant homologs compared to contiguous k-mer matching.
     """
     if start_index + len(seed_model) > len(sequence):
         return None
@@ -14,7 +17,9 @@ def apply_spaced_seed(sequence, start_index, seed_model):
 
 def build_reference_index(reference, seed_model):
     """
-    Xây dựng Hash Table (Index) cho chuỗi Reference.
+    Construct a hash table (index) for the reference sequence using a spaced seed pattern.
+    For each position in the reference, applies the spaced seed and stores the position
+    in a hash table indexed by the masked seed. This enables rapid lookup during query scanning.
     """
     index_table = {}
     for i in range(len(reference) - len(seed_model) + 1):
@@ -27,21 +32,26 @@ def build_reference_index(reference, seed_model):
 
 def run_patternhunter_generator(query, reference, seed_model="111010010100110111"):
     """
-    Hàm Generator: Quét chuỗi Query và trả về trạng thái từng bước (yield).
+    Generator function implementing the PatternHunter algorithm.
+    Scans the query sequence for matches of the spaced seed pattern in the reference index,
+    and yields status updates at each step for real-time visualization.
+    The spaced seed pattern improves sensitivity compared to contiguous k-mers,
+    enabling detection of more distant sequence homologies.
+    Default seed model: "111010010100110111" (weight=11, span=18)
     """
     start_time = time.time()
     
-    # Bước 1: Xây dựng Index (Thường diễn ra rất nhanh)
+    # Step 1: Build the reference index (typically very fast)
     ref_index = build_reference_index(reference, seed_model)
     
     hits = []
     
-    # Bước 2: Quét chuỗi Query
+    # Step 2: Scan the query sequence
     for query_pos in range(len(query) - len(seed_model) + 1):
         query_seed = apply_spaced_seed(query, query_pos, seed_model)
         current_step_hits = []
         
-        # Tra cứu hash table O(1)
+        # Hash table lookup O(1)
         if query_seed and query_seed in ref_index:
             for ref_pos in ref_index[query_seed]:
                 hit_info = {
@@ -52,7 +62,7 @@ def run_patternhunter_generator(query, reference, seed_model="111010010100110111
                 hits.append(hit_info)
                 current_step_hits.append(hit_info)
                 
-        # TRỌNG TÂM: Trả về trạng thái hiện tại để Streamlit vẽ UI
+        # PRIMARY FOCUS: Yield current status for Streamlit to render the UI
         yield {
             "status": "running",
             "step": query_pos + 1,
@@ -64,7 +74,7 @@ def run_patternhunter_generator(query, reference, seed_model="111010010100110111
         
     execution_time = time.time() - start_time
     
-    # Yield kết quả cuối cùng
+    # Yield final results
     yield {
         "status": "done",
         "final_hits": hits,
