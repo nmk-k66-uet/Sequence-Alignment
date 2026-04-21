@@ -14,7 +14,7 @@ from algorithms.blast import run_blast_generator
 from algorithms.progressive import run_progressive_msa_generator
 from algorithms.iterative import run_iterative_msa_generator
 from algorithms.kmer_clustering import run_ml_clustering_msa_generator
-from algorithms.upgma import run_upgma_msa_generator
+from algorithms.upgma import run_upgma_msa_generator, create_tree_plot
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -536,8 +536,6 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                 t1_params['iterations'] = st.number_input("Refinement Iterations:", min_value=1, max_value=10, value=2, key="t1_msa_iter")
             elif algo_msa == "K-mer Clustering (Hybrid ML)":
                 t1_params['k'] = st.number_input("K-mer Size (Feature Extraction):", min_value=2, max_value=6, value=3, key="t1_msa_kmer")
-            elif algo_msa == "UPGMA Hierarchical":
-                t1_params['method'] = st.selectbox("Clustering Method:", ["UPGMA", "NJ"], key="t1_msa_method")
 
             btn_run_msa = st.button("Run Alignment", type="primary", width='content')
         
@@ -565,19 +563,41 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                             with st.expander(f"{step_data['title']}", expanded=True):
                                 if "description" in step_data:
                                     st.markdown(step_data["description"])
-                                if "tree_figure" in step_data and step_data["tree_figure"] is not None:
-                                    st.plotly_chart(step_data["tree_figure"], width='stretch')
-
-                                if "matrix" in step_data and step_data["matrix"]:
-                                    df_matrix = pd.DataFrame(
-                                        step_data["matrix"], 
-                                        columns=step_data["matrix_labels"], 
-                                        index=step_data["matrix_labels"]
-                                    )
+                        # 1. Vẽ Ma trận khoảng cách
+                                if "matrix" in step_data and step_data["matrix"] is not None:
+                                    # Handle both DataFrame and raw matrix data
+                                    if isinstance(step_data["matrix"], pd.DataFrame):
+                                        df_matrix = step_data["matrix"]
+                                    else:
+                                        matrix_labels = step_data.get("matrix_labels", [f"Seq{i}" for i in range(len(step_data["matrix"]))])
+                                        df_matrix = pd.DataFrame(
+                                            step_data["matrix"], 
+                                            columns=matrix_labels, 
+                                            index=matrix_labels
+                                        )
                                     st.markdown("**Similarity Matrix:**")
-                                    st.dataframe(df_matrix.style.background_gradient(cmap='Blues'), use_container_width=True)
-                                
-                                if "current_msa" in step_data:
+                                    st.dataframe(df_matrix.style.background_gradient(cmap='Blues'), width='stretch')
+                                    
+                                # 2. Vẽ Cây phát sinh loài
+                                if "tree_figure" in step_data and step_data["tree_figure"] is not None:
+                                    st.markdown("**Evolutionary Guide Tree:**")
+                                    st.plotly_chart(step_data["tree_figure"], width='stretch')
+                                    if "tree_newick" in step_data:
+                                        st.caption(f"Newick format: `{step_data['tree_newick']}`")
+                                elif "tree_fig" in step_data and step_data["tree_fig"] is not None:
+                                    st.markdown("**Evolutionary Guide Tree (UPGMA):**")
+                                    st.pyplot(step_data["tree_fig"], width='stretch')
+                                elif "tree_newick" in step_data:
+                                    st.markdown("**Evolutionary Guide Tree (Newick Format):**")
+                                    tree_fig = create_tree_plot(step_data["tree_newick"])
+                                    if tree_fig:
+                                        st.pyplot(tree_fig, width='stretch')
+                                    else:
+                                        st.code(step_data["tree_newick"], language="text")
+                                        
+                                # 3. Vẽ Lưới Gióng Hàng MSA
+                                if step_data.get("current_msa"):
+                                    st.markdown("**Alignment Preview:**")
                                     st.markdown(render_msa(step_data["current_msa"], step_data["current_names"]), unsafe_allow_html=True)
                             
                             time.sleep(0.2)
@@ -594,9 +614,14 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                             
                             score, matches, mismatches, gaps = calculate_sp_score(step_data["msa"])
                             
+                            # Safe access to metrics with defaults
+                            metrics = step_data.get('metrics', {})
+                            exec_time = metrics.get('time_seconds', 0)
+                            align_length = metrics.get('alignment_length', len(step_data["msa"][0]) if step_data["msa"] else 0)
+                            
                             m1, m2, m3, m4 = st.columns(4)
-                            m1.metric("Execution Time", f"{step_data['metrics']['time_seconds']}s")
-                            m2.metric("MSA Profile Length", step_data['metrics']['alignment_length'])
+                            m1.metric("Execution Time", f"{exec_time}s")
+                            m2.metric("MSA Profile Length", align_length)
                             m3.metric("Alignment Score (SP)", score)
                             m4.metric("Match / Mismatch / Gap", f"{matches} / {mismatches} / {gaps}")
 
@@ -640,6 +665,8 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                             return run_iterative_msa_generator(seqs, names, iterations=params['iterations'])
                         elif algo_name == "K-mer Clustering (Hybrid ML)":
                             return run_ml_clustering_msa_generator(seqs, names, k=params['k'])
+                        elif algo_name == "UPGMA Hierarchical":
+                            return run_upgma_msa_generator(seqs, names)
                     
                     tracemalloc.start()
                     genA = run_selected_generator(t2_algoA, t2_paramsA)
@@ -661,18 +688,26 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                 scoreA, matchA, mismatchA, gapA = calculate_sp_score(resA["msa"])
                 scoreB, matchB, mismatchB, gapB = calculate_sp_score(resB["msa"])
                 
+                # Safe access to metrics
+                metricsA = resA.get('metrics', {})
+                metricsB = resB.get('metrics', {})
+                lengthA = metricsA.get('alignment_length', len(resA['msa'][0]) if resA['msa'] else 0)
+                timeA = metricsA.get('time_seconds', 0)
+                lengthB = metricsB.get('alignment_length', len(resB['msa'][0]) if resB['msa'] else 0)
+                timeB = metricsB.get('time_seconds', 0)
+                
                 st.subheader("Performance Report")
                 col_s1, col_s2 = st.columns(2)
                 with col_s1:
-                    st.info(f"**A ({t2_algoA}):** Score: {scoreA} | Length: {resA['metrics']['alignment_length']} | Time: {resA['metrics']['time_seconds']}s")
+                    st.info(f"**A ({t2_algoA}):** Score: {scoreA} | Length: {lengthA} | Time: {timeA}s")
                 with col_s2:
-                    st.warning(f"**B ({t2_algoB}):** Score: {scoreB} | Length: {resB['metrics']['alignment_length']} | Time: {resB['metrics']['time_seconds']}s")
+                    st.warning(f"**B ({t2_algoB}):** Score: {scoreB} | Length: {lengthB} | Time: {timeB}s")
                     
                 st.markdown("<br>", unsafe_allow_html=True)
                 
                 df_perf_msa = pd.DataFrame({
-                    "Algorithm": ["A", "B"],
-                    "Execution Time (s)": [resA['metrics']['time_seconds'], resB['metrics']['time_seconds']],
+                    "Algorithm": [t2_algoA[:10], t2_algoB[:10]],
+                    "Execution Time (s)": [timeA, timeB],
                     "Peak Memory (KB)": [peakA_kb, peakB_kb],
                     "Alignment Score": [scoreA, scoreB]
                 })
