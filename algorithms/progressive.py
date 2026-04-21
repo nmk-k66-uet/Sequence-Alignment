@@ -167,76 +167,117 @@ def run_progressive_msa_generator(sequences, seq_names):
         yield {"status": "done", "msa": sequences, "names": seq_names, "metrics": {"time_seconds": 0, "num_sequences": n, "alignment_length": len(sequences[0])}}
         return
 
-    # Step 1: Build pairwise sequence identity matrix
-    matrix = []
+    # ---------------------------------------------------------
+    # KHẮC PHỤC 1: Tính ma trận khoảng cách bằng gióng hàng thực sự
+    # ---------------------------------------------------------
+    matrix = [[0.0] * n for _ in range(n)]
     for i in range(n):
-        row = []
         for j in range(n):
             if i == j:
-                row.append(100.0)
-            else:
-                matches = sum(1 for a, b in zip(sequences[i], sequences[j]) if a == b)
-                identity = round((matches / max(len(sequences[i]), len(sequences[j]))) * 100, 1)
-                row.append(identity)
-        matrix.append(row)
+                matrix[i][j] = 100.0
+            elif i < j:
+                # Sử dụng hàm gióng hàng có sẵn (Profile 1 trình tự vs 1 trình tự)
+                aligned_p, aligned_s = align_profile_sequence([sequences[i]], sequences[j])
+                s1, s2 = aligned_p[0], aligned_s
+                
+                # Đếm số lượng match trên trình tự ĐÃ ĐƯỢC GIÓNG HÀNG
+                matches = sum(1 for a, b in zip(s1, s2) if a == b and a != '-')
+                # Tính % dựa trên chiều dài của bản gióng hàng
+                identity = round((matches / len(s1)) * 100, 1)
+                
+                matrix[i][j] = identity
+                matrix[j][i] = identity # Ma trận đối xứng
         
     df_matrix = pd.DataFrame(matrix, columns=seq_names, index=seq_names)
     
-    # Display pairwise identity matrix
     yield {
         "status": "card",
         "title": "1. Pairwise Sequence Identity Matrix",
-        "description": "Calculate the pairwise sequence identity matrix (Identity %) between all sequence pairs. This similarity matrix serves as the foundation for constructing the guide tree, enabling the algorithm to identify the most closely related sequences and determine the optimal alignment order for multiple sequence alignment.",
+        "description": "Calculate the pairwise sequence identity matrix (Identity %) between all sequence pairs using actual dynamic programming. This similarity matrix serves as the foundation for constructing the guide tree.",
         "matrix": df_matrix
     }
 
-    # Step 2: Build and display the guide tree
-    tree_nodes, tree_edges = build_guide_tree_visualization(seq_names)
+    # ---------------------------------------------------------
+    # KHẮC PHỤC 2: Xác định thứ tự gióng hàng (Guide Tree Order)
+    # ---------------------------------------------------------
+    # 2a. Tìm cặp trình tự giống nhau nhất
+    max_id = -1
+    best_pair = (0, 1)
+    for i in range(n):
+        for j in range(i+1, n):
+            if matrix[i][j] > max_id:
+                max_id = matrix[i][j]
+                best_pair = (i, j)
+    
+    # 2b. Xây dựng danh sách thứ tự tối ưu
+    order_indices = list(best_pair)
+    unaligned = set(range(n)) - set(best_pair)
+    
+    # Thuật toán Greedy: Chọn trình tự có độ tương đồng trung bình cao nhất với nhóm đã chọn
+    while unaligned:
+        best_seq = -1
+        max_avg_id = -1
+        for k in unaligned:
+            avg_id = sum(matrix[k][m] for m in order_indices) / len(order_indices)
+            if avg_id > max_avg_id:
+                max_avg_id = avg_id
+                best_seq = k
+        order_indices.append(best_seq)
+        unaligned.remove(best_seq)
+        
+    # 2c. Sắp xếp lại dữ liệu đầu vào theo thứ tự của Guide Tree
+    ordered_sequences = [sequences[i] for i in order_indices]
+    ordered_names = [seq_names[i] for i in order_indices]
+
+    # Step 2: Build and display the guide tree (Dùng danh sách đã sắp xếp)
+    tree_nodes, tree_edges = build_guide_tree_visualization(ordered_names)
     tree_fig = create_tree_plotly(tree_nodes, tree_edges) if tree_nodes else None
     
     yield {
         "status": "card",
         "title": "2. Guide Tree Construction",
-        "description": f"Based on the pairwise distance matrix, the algorithm constructs a hierarchical guide tree (Neighbor-Joining or UPGMA topology) to determine the optimal sequence alignment order. The guide tree structure dictates which sequences to align first and progressively adds remaining sequences to the growing multiple sequence alignment (MSA).\n\n**Alignment execution order:** `{' ➔ '.join(seq_names)}`",
+        "description": f"Based on the pairwise distance matrix, the algorithm constructed a guide tree to determine the optimal sequence alignment order.\n\n**Alignment execution order:** `{' ➔ '.join(ordered_names)}`",
         "tree_figure": tree_fig
     }
 
-    # Step 3: Progressive alignment - start with first sequence and add others one by one
-    current_msa = [sequences[0]]
-    current_names = [seq_names[0]]
+    # ---------------------------------------------------------
+    # Step 3: Progressive alignment - Chạy theo thứ tự đã tối ưu
+    # ---------------------------------------------------------
+    current_msa = [ordered_sequences[0]]
+    current_names = [ordered_names[0]]
     
-    # Initialize the profile with the first pairwise alignment
-    aligned_profile, aligned_seq = align_profile_sequence(current_msa, sequences[1])
+    # Khởi tạo profile bằng cách gióng hàng 2 trình tự giống nhau nhất
+    aligned_profile, aligned_seq = align_profile_sequence(current_msa, ordered_sequences[1])
     current_msa = aligned_profile + [aligned_seq]
-    current_names.append(seq_names[1])
+    current_names.append(ordered_names[1])
     
     yield {
         "status": "card",
-        "title": f"3.1. Root Alignment ({seq_names[0]} & {seq_names[1]})",
-        "description": f"Initialize the root profile by performing pairwise alignment of the two most similar sequences. This creates the foundational alignment profile that will be progressively expanded by aligning the remaining sequences. The profile-based approach allows efficient scoring using character frequency distributions.",
+        "title": f"3.1. Root Alignment ({ordered_names[0]} & {ordered_names[1]})",
+        "description": f"Initialize the root profile by performing pairwise alignment of the two most similar sequences.",
         "current_msa": current_msa,
         "current_names": current_names
     }
     
-    # Progressively add remaining sequences to the growing alignment
+    # Lần lượt thêm các trình tự còn lại vào Profile
     for i in range(2, n):
-        aligned_profile, aligned_seq = align_profile_sequence(current_msa, sequences[i])
+        aligned_profile, aligned_seq = align_profile_sequence(current_msa, ordered_sequences[i])
         current_msa = aligned_profile + [aligned_seq]
-        current_names.append(seq_names[i])
+        current_names.append(ordered_names[i])
         
         if i > 2:
             yield {
                 "status": "card",
-                "title": f"3.{i}. Progressive Addition of Sequence {seq_names[i]}",
-                "description": f"Apply dynamic programming profile-sequence alignment to progressively add **{seq_names[i]}** to the current MSA.",
+                "title": f"3.{i}. Progressive Addition of Sequence {ordered_names[i]}",
+                "description": f"Apply dynamic programming profile-sequence alignment to progressively add **{ordered_names[i]}** to the current MSA.",
                 "current_msa": current_msa,
                 "current_names": current_names
             }
         else:
             yield {
                 "status": "card",
-                "title": f"3.2. Adding Sequence {seq_names[i]}",
-                "description": f"Apply dynamic programming profile-sequence alignment to add **{seq_names[i]}** to the current MSA. The algorithm scores each position based on the character distribution in the existing profile, allowing efficient incorporation of sequences in decreasing order of similarity. This greedy approach maintains computational efficiency while producing reasonable alignments.",
+                "title": f"3.2. Adding Sequence {ordered_names[i]}",
+                "description": f"Apply dynamic programming profile-sequence alignment to add **{ordered_names[i]}** to the current MSA.",
                 "current_msa": current_msa,
                 "current_names": current_names
             }
