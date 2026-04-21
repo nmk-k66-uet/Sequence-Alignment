@@ -14,6 +14,7 @@ from algorithms.blast import run_blast_generator
 from algorithms.progressive import run_progressive_msa_generator
 from algorithms.iterative import run_iterative_msa_generator
 from algorithms.kmer_clustering import run_ml_clustering_msa_generator
+from algorithms.upgma import run_upgma_msa_generator
 
 # ==========================================
 # PAGE CONFIGURATION
@@ -520,7 +521,7 @@ ATGCTAGCTAG-AAGCTGATCGCAT
     st.divider()
 
     tab1_msa, tab2_msa = st.tabs(["Single Run", "Performance Comparison"])
-    msa_algo_list = ["Progressive Alignment", "Iterative Refinement", "K-mer Clustering (Hybrid ML)"]
+    msa_algo_list = ["Progressive Alignment", "UPGMA Hierarchical", "Iterative Refinement", "K-mer Clustering (Hybrid ML)"]
 
     # ====== TAB 1: SINGLE RUN (MSA) ======
     with tab1_msa:
@@ -535,7 +536,9 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                 t1_params['iterations'] = st.number_input("Refinement Iterations:", min_value=1, max_value=10, value=2, key="t1_msa_iter")
             elif algo_msa == "K-mer Clustering (Hybrid ML)":
                 t1_params['k'] = st.number_input("K-mer Size (Feature Extraction):", min_value=2, max_value=6, value=3, key="t1_msa_kmer")
-                
+            elif algo_msa == "UPGMA Hierarchical":
+                t1_params['method'] = st.selectbox("Clustering Method:", ["UPGMA", "NJ"], key="t1_msa_method")
+
             btn_run_msa = st.button("Run Alignment", type="primary", width='content')
         
         with col_msa2:
@@ -554,6 +557,8 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                         generator = run_iterative_msa_generator(seqs, names, iterations=t1_params['iterations'])
                     elif algo_msa == "K-mer Clustering (Hybrid ML)":
                         generator = run_ml_clustering_msa_generator(seqs, names, k=t1_params['k'])
+                    elif algo_msa == "UPGMA Hierarchical":
+                        generator = run_upgma_msa_generator(seqs, names)
                     
                     for step_data in generator:
                         if step_data["status"] == "card":
@@ -562,8 +567,16 @@ ATGCTAGCTAG-AAGCTGATCGCAT
                                     st.markdown(step_data["description"])
                                 if "tree_figure" in step_data and step_data["tree_figure"] is not None:
                                     st.plotly_chart(step_data["tree_figure"], width='stretch')
-                                if "matrix" in step_data:
-                                    st.dataframe(step_data["matrix"], width='stretch')
+
+                                if "matrix" in step_data and step_data["matrix"]:
+                                    df_matrix = pd.DataFrame(
+                                        step_data["matrix"], 
+                                        columns=step_data["matrix_labels"], 
+                                        index=step_data["matrix_labels"]
+                                    )
+                                    st.markdown("**Similarity Matrix:**")
+                                    st.dataframe(df_matrix.style.background_gradient(cmap='Blues'), use_container_width=True)
+                                
                                 if "current_msa" in step_data:
                                     st.markdown(render_msa(step_data["current_msa"], step_data["current_names"]), unsafe_allow_html=True)
                             
